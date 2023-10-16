@@ -3,92 +3,71 @@ package acl
 import (
 	"bufio"
 	_ "embed"
-	"io/ioutil"
 	"log"
 	"os"
 	"path"
 	"strings"
 	"text/template"
-	"unsafe"
 
-	"github.com/whoisix/subscribe2clash/internal/req"
-	"github.com/whoisix/subscribe2clash/internal/subscribe"
+	"github.com/icpd/subscribe2clash/internal/req"
 )
 
 //go:embed config/default_base_config.yaml
 var defaultBaseConfig []byte
 
-type genOption struct {
+var GlobalGen *Gen
+
+type Gen struct {
+	OutputFile string
 	baseFile   string
-	outputFile string
+
+	configContent []byte
+	rule          string
 }
 
-type GenOption func(option *genOption)
-
-func WithBaseFile(filepath string) GenOption {
-	return func(option *genOption) {
-		option.baseFile = filepath
-	}
-}
-
-func WithOutputFile(filepath string) GenOption {
-	return func(option *genOption) {
-		option.outputFile = filepath
-	}
-}
-
-func GenerateConfig(genOptions ...GenOption) {
-	option := genOption{
-		outputFile: "./config/acl.yaml",
-	}
-
-	for _, fn := range genOptions {
-		fn(&option)
-	}
-
-	subscribe.OutputFile = option.outputFile
-
+func (g *Gen) GenerateConfig() {
 	var s []string
 	rules := GetRules()
 	for _, r := range rules {
 		log.Println(r.url, r.rule)
-		resp, _ := req.HttpGet(r.url)
+		resp, err := req.HttpGet(r.url)
+		if err != nil {
+			log.Printf("获取规则失败: %s, err:%v", r.url, err)
+		}
+
 		s = append(s, AddProxyGroup(resp, r.rule))
 	}
 
 	r := MergeRule(s...)
 	r = unique(r)
+	g.rule = r
 
-	var (
-		configContent []byte
-		err           error
-	)
-	if option.baseFile != "" {
-		configContent, err = ioutil.ReadFile(option.baseFile)
+	if g.baseFile != "" {
+		var err error
+		g.configContent, err = os.ReadFile(g.baseFile)
 		if err != nil {
 			log.Fatal("读取基础配置文件失败", err)
 		}
 	} else {
-		configContent = defaultBaseConfig
+		g.configContent = defaultBaseConfig
 	}
 
-	writeNewFile(configContent, option.outputFile, r)
+	g.writeNewFile()
 }
 
-func writeNewFile(configContent []byte, outputFile, filler string) {
-	ctt := *(*string)(unsafe.Pointer(&configContent))
-	tpl, err := template.New("config").Parse(ctt)
+func (g *Gen) writeNewFile() {
+	tpl, err := template.New("config").Parse(string(g.configContent))
 	if err != nil {
 		log.Fatal("解析配置模版失败", err)
 	}
 
-	dir := path.Dir(outputFile)
+	dir := path.Dir(g.OutputFile)
 	if !Exists(dir) {
 		mkDir(dir)
 	}
 
 	file, err := os.OpenFile(
-		outputFile,
+		g.OutputFile,
 		os.O_WRONLY|os.O_TRUNC|os.O_CREATE,
 		0666,
 	)
@@ -102,14 +81,28 @@ func writeNewFile(configContent []byte, outputFile, filler string) {
 		}
 	}(file)
 
-	err = tpl.Execute(file, filler)
+	err = tpl.Execute(file, g.rule)
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
+type GenOption func(option *Gen)
+
+func WithBaseFile(filepath string) GenOption {
+	return func(option *Gen) {
+		option.baseFile = filepath
+	}
+}
+
+func WithOutputFile(filepath string) GenOption {
+	return func(option *Gen) {
+		option.OutputFile = filepath
+	}
+}
+
 func unique(rules string) string {
-	var filterMap = make(map[string]interface{})
+	var filterMap = make(map[string]any)
 	scanner := bufio.NewScanner(strings.NewReader(rules))
 
 	var builder strings.Builder
@@ -141,4 +134,17 @@ func mkDir(path string) {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func New(ops ...GenOption) *Gen {
+	gen := Gen{
+		OutputFile: "./config/acl.yaml",
+	}
+
+	for _, fn := range ops {
+		fn(&gen)
+	}
+	GlobalGen = &gen
+
+	return GlobalGen
 }

@@ -8,4 +8,8 @@ var (
 	Listen         string
 	Tick           int
 	Version        bool
+	NodeOnly       bool
+
+	SourceLinks string
+	SourceFile  string
 )

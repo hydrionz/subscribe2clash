@@ -6,20 +6,19 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/whoisix/subscribe2clash/app/router"
-	"github.com/whoisix/subscribe2clash/internal/global"
+	"github.com/icpd/subscribe2clash/app/router"
+	"github.com/icpd/subscribe2clash/internal/global"
 )
 
 func initHttpServer() {
-
 	r := gin.New()
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
+
 	router.RegisterRouter(r)
 
 	srv := &http.Server{
@@ -27,16 +26,8 @@ func initHttpServer() {
 		Handler: r,
 	}
 
+	closed := make(chan struct{})
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %v\n", err)
-		}
-	}()
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Add(-1)
 		quit := make(chan os.Signal, 1)
 		signal.Notify(quit, os.Interrupt)
 		<-quit
@@ -47,8 +38,14 @@ func initHttpServer() {
 		if err := srv.Shutdown(ctx); err != nil {
 			log.Fatalf("server shutdown: %v", err)
 		}
-	}()
-	wg.Wait()
 
-	log.Println("server exiting")
+		close(closed)
+	}()
+
+	log.Println("服务地址 -> http://localhost:8162")
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("listen: %v\n", err)
+	}
+
+	<-closed
 }
